@@ -4,7 +4,128 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Akıllı Oda Radar</title>
-  <link rel="stylesheet" href="style.css" />
+  <style>
+    :root{
+      --bg: #06080c;
+      --panel: rgba(10, 14, 22, .65);
+      --grid: rgba(60, 255, 140, .22);
+      --grid-strong: rgba(60, 255, 140, .45);
+      --neon: rgba(60, 255, 140, 1);
+      --neon-soft: rgba(60, 255, 140, .65);
+      --danger: rgba(255, 60, 60, 1);
+      --danger-soft: rgba(255, 60, 60, .32);
+      --text: rgba(235, 255, 245, .92);
+      --muted: rgba(235, 255, 245, .6);
+    }
+
+    *{ box-sizing:border-box; }
+    html,body{
+      height:100%;
+      margin:0;
+      background: radial-gradient(1200px 800px at 50% 80%, rgba(60,255,140,.12), transparent 60%),
+                  radial-gradient(900px 600px at 70% 20%, rgba(60,255,140,.06), transparent 55%),
+                  var(--bg);
+      color: var(--text);
+      overflow:hidden;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Helvetica Neue";
+    }
+
+    .hud{
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      right: 18px;
+      display:flex;
+      gap:12px;
+      align-items:stretch;
+      justify-content:space-between;
+      pointer-events:none;
+    }
+
+    .card{
+      pointer-events:none;
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+      border: 1px solid rgba(60,255,140,.18);
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      backdrop-filter: blur(10px);
+      border-radius: 16px;
+      padding: 12px 14px;
+      min-width: 260px;
+    }
+
+    .title{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      font-weight: 700;
+      letter-spacing:.4px;
+      font-size: 14px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    .dot{
+      width:10px; height:10px;
+      border-radius:999px;
+      background: var(--neon);
+      box-shadow: 0 0 14px rgba(60,255,140,.85);
+    }
+    .dot.danger{
+      background: var(--danger);
+      box-shadow: 0 0 16px rgba(255,60,60,.95);
+    }
+
+    .big{
+      margin-top:10px;
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: .2px;
+      line-height: 1.1;
+    }
+    .sub{
+      margin-top:6px;
+      font-size: 13px;
+      color: var(--muted);
+      display:flex;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(0,0,0,.18);
+    }
+    .pill b{ color: var(--text); font-weight: 700; }
+
+    .right{
+      display:flex; gap:12px; align-items:stretch;
+    }
+
+    canvas{ display:block; width:100vw; height:100vh; }
+
+    .footer{
+      position:fixed;
+      bottom:16px;
+      left:18px;
+      right:18px;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      color: rgba(235,255,245,.45);
+      font-size:12px;
+      letter-spacing:.2px;
+      pointer-events:none;
+    }
+    .badge{
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(60,255,140,.18);
+      background: rgba(0,0,0,.18);
+    }
+  </style>
 </head>
 <body>
   <canvas id="radar"></canvas>
@@ -25,10 +146,7 @@
 
     <div class="right">
       <div class="card" style="min-width:260px;">
-        <div class="title">
-          <span class="dot"></span>
-          <span>Sistem</span>
-        </div>
+        <div class="title"><span class="dot"></span><span>Sistem</span></div>
         <div class="sub" style="margin-top:10px;">
           <span class="pill">Kaynak: <b>USB → PC</b></span>
           <span class="pill">Arayüz: <b>Web + ngrok</b></span>
@@ -42,6 +160,285 @@
     <div class="badge" id="netBadge">/data • 200ms</div>
   </div>
 
-  <script src="script.js"></script>
+<script>
+(() => {
+  const canvas = document.getElementById("radar");
+  const ctx = canvas.getContext("2d");
+
+  const statusDot = document.getElementById("statusDot");
+  const statusText = document.getElementById("statusText");
+  const angleText  = document.getElementById("angleText");
+  const timeText   = document.getElementById("timeText");
+  const holdText   = document.getElementById("holdText");
+
+  // ---- Radar Model ----
+  let alarm = 0;
+  let alarmAngle = 0; // 0..180
+  let lastUpdated = 0;
+
+  // Sweep animation (görsel; servo ile bire bir aynı olmak zorunda değil)
+  let sweep = 40;
+  let sweepDir = 1;
+  const sweepMin = 40, sweepMax = 140;
+  const sweepSpeed = 0.55; // derece/frame (görüntü pürüzsüzlüğü)
+
+  // Alarm wedge efekti (kırmızı alan)
+  let alarmFlash = 0; // 0..1
+  const alarmWedgeWidthDeg = 10; // alarm bölgesinin "kalınlığı"
+
+  // Polling
+  const POLL_MS = 200;
+
+  // UI tokens (hold'ı göstermek için)
+  holdText.textContent = "3.0s";
+
+  function resize() {
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  function degToRad(deg) { return deg * Math.PI / 180; }
+
+  function polarToXY(cx, cy, r, deg) {
+    // Radar: 0° solda değil, biz 0°'yi sol alt (0) -> sağ (180) şeklinde yarım daire istiyoruz.
+    // Bu yüzden: deg 0..180 => rad PI..0 (ters)
+    const rad = Math.PI - degToRad(deg);
+    return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) };
+  }
+
+  function nowStr(ts) {
+    if (!ts) return "—";
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString();
+  }
+
+  function drawBackground() {
+    // Hafif vignette
+    const w = window.innerWidth, h = window.innerHeight;
+    const grad = ctx.createRadialGradient(w/2, h*0.85, 50, w/2, h*0.85, Math.max(w,h));
+    grad.addColorStop(0, "rgba(60,255,140,0.06)");
+    grad.addColorStop(0.55, "rgba(0,0,0,0.0)");
+    grad.addColorStop(1, "rgba(0,0,0,0.65)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,w,h);
+  }
+
+  function drawGrid(cx, cy, R) {
+    const w = window.innerWidth, h = window.innerHeight;
+
+    // grid circles (semicircles)
+    ctx.lineWidth = 1;
+    for (let i=1; i<=4; i++){
+      const r = R * (i/4);
+      ctx.strokeStyle = i === 4 ? "rgba(60,255,140,0.35)" : "rgba(60,255,140,0.18)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, Math.PI, 0, false);
+      ctx.stroke();
+    }
+
+    // angle rays
+    const rays = [30, 60, 90, 120, 150];
+    rays.forEach(a => {
+      ctx.strokeStyle = a === 90 ? "rgba(60,255,140,0.38)" : "rgba(60,255,140,0.22)";
+      ctx.beginPath();
+      const p = polarToXY(cx, cy, R, a);
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    });
+
+    // baseline
+    ctx.strokeStyle = "rgba(60,255,140,0.22)";
+    ctx.beginPath();
+    ctx.moveTo(cx - R, cy);
+    ctx.lineTo(cx + R, cy);
+    ctx.stroke();
+
+    // angle labels
+    ctx.fillStyle = "rgba(60,255,140,0.8)";
+    ctx.font = "600 16px ui-sans-serif, system-ui";
+    [30,60,120,150].forEach(a => {
+      const p = polarToXY(cx, cy, R*1.03, a);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(degToRad((90-a)*0.08));
+      ctx.fillText(a + "°", 0, 0);
+      ctx.restore();
+    });
+    // 90° label top center
+    const top = polarToXY(cx, cy, R*1.03, 90);
+    ctx.fillText("90°", top.x - 18, top.y - 10);
+  }
+
+  function drawSweep(cx, cy, R) {
+    // green wedge glow
+    const sweepWidth = 14; // deg
+    const start = sweep - sweepWidth;
+    const end   = sweep + sweepWidth;
+
+    // gradient wedge
+    const steps = 22;
+    for (let i=0; i<steps; i++){
+      const t = i/(steps-1);
+      const alpha = (1-t) * 0.20;
+      const inner = R * (0.08 + t*0.92);
+
+      ctx.strokeStyle = `rgba(60,255,140,${alpha})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const p1 = polarToXY(cx, cy, inner, start);
+      const p2 = polarToXY(cx, cy, inner, end);
+      ctx.moveTo(p1.x, p1.y);
+      ctx.arc(cx, cy, inner, Math.PI - degToRad(start), Math.PI - degToRad(end), true);
+      ctx.stroke();
+    }
+
+    // main sweep line
+    const p = polarToXY(cx, cy, R, sweep);
+    ctx.strokeStyle = "rgba(60,255,140,0.95)";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+
+    // tip glow
+    ctx.fillStyle = "rgba(60,255,140,0.95)";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.2, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawAlarmWedge(cx, cy, R) {
+    if (!alarm || !alarmAngle) return;
+
+    // flash rises quickly when alarm hits, then eases out
+    alarmFlash = Math.min(1, alarmFlash + 0.08);
+
+    const width = alarmWedgeWidthDeg;
+    const a1 = alarmAngle - width;
+    const a2 = alarmAngle + width;
+
+    // red filled wedge
+    ctx.save();
+    ctx.globalAlpha = 0.22 + 0.18 * alarmFlash;
+    ctx.fillStyle = "rgba(255,60,60,1)";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    const p1 = polarToXY(cx, cy, R, a1);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.arc(cx, cy, R, Math.PI - degToRad(a1), Math.PI - degToRad(a2), true);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // red edge line
+    const p = polarToXY(cx, cy, R, alarmAngle);
+    ctx.strokeStyle = "rgba(255,60,60,0.95)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+
+    // label
+    ctx.fillStyle = "rgba(255,60,60,0.95)";
+    ctx.font = "800 18px ui-sans-serif, system-ui";
+    const label = `ALARM • ${alarmAngle}°`;
+    ctx.fillText(label, 22, window.innerHeight - 22);
+
+    // dot
+    ctx.fillStyle = "rgba(255,60,60,0.95)";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5.2, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawBottomReadout() {
+    ctx.fillStyle = "rgba(60,255,140,0.9)";
+    ctx.font = "800 22px ui-sans-serif, system-ui";
+    const left = 22;
+    const y = window.innerHeight - 22;
+
+    const sweepTxt = `Sweep: ${Math.round(sweep)}°`;
+    ctx.fillText(sweepTxt, left, y);
+
+    ctx.fillStyle = "rgba(235,255,245,0.75)";
+    ctx.font = "600 14px ui-sans-serif, system-ui";
+    ctx.fillText("Canvas Radar • /data", left, y - 24);
+  }
+
+  function tick() {
+    // Clear with slight alpha for trail
+    ctx.fillStyle = "rgba(6,8,12,0.18)";
+    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+    drawBackground();
+
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight * 0.84;   // radar center near bottom
+    const R  = Math.min(window.innerWidth * 0.46, window.innerHeight * 0.72);
+
+    drawGrid(cx, cy, R);
+
+    // sweep update
+    sweep += sweepDir * sweepSpeed;
+    if (sweep >= sweepMax) { sweep = sweepMax; sweepDir = -1; }
+    if (sweep <= sweepMin) { sweep = sweepMin; sweepDir =  1; }
+
+    drawSweep(cx, cy, R);
+    drawAlarmWedge(cx, cy, R);
+    drawBottomReadout();
+
+    // If alarm is off, decay flash to 0 smoothly
+    if (!alarm) alarmFlash = Math.max(0, alarmFlash - 0.06);
+
+    requestAnimationFrame(tick);
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/data", { cache: "no-store" });
+      const d = await r.json();
+
+      alarm = d.alarm ? 1 : 0;
+      alarmAngle = d.angle || 0;
+      lastUpdated = d.updated_at || 0;
+
+      // HUD
+      if (alarm) {
+        statusDot.classList.add("danger");
+        statusText.textContent = "HAREKET VAR!";
+        angleText.textContent = alarmAngle + "°";
+      } else {
+        statusDot.classList.remove("danger");
+        statusText.textContent = "Hareket Yok";
+        angleText.textContent = "—";
+      }
+      timeText.textContent = nowStr(lastUpdated);
+
+    } catch (e) {
+      // Ağ hatasında UI düşmesin
+      document.getElementById("netBadge").textContent = "Bağlantı yok";
+    } finally {
+      setTimeout(poll, POLL_MS);
+    }
+  }
+
+  // Start
+  // İlk frame: karanlık temiz
+  ctx.fillStyle = "rgba(6,8,12,1)";
+  ctx.fillRect(0,0,window.innerWidth,window.innerHeight);
+
+  requestAnimationFrame(tick);
+  poll();
+})();
+</script>
 </body>
 </html>
