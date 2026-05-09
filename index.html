@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Akıllı Oda Radar</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="radar"></canvas>
+
+  <div class="hud">
+    <div class="card" style="max-width:520px;">
+      <div class="title">
+        <span class="dot" id="statusDot"></span>
+        <span>Akıllı Oda Güvenlik • Radar Paneli</span>
+      </div>
+      <div class="big" id="statusText">Hareket Yok</div>
+      <div class="sub">
+        <span class="pill">Açı: <b id="angleText">—</b></span>
+        <span class="pill">Son Güncelleme: <b id="timeText">—</b></span>
+        <span class="pill">Alarm Bekletme: <b id="holdText">3.0s</b></span>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="card" style="min-width:260px;">
+        <div class="title">
+          <span class="dot"></span>
+          <span>Sistem</span>
+        </div>
+        <div class="sub" style="margin-top:10px;">
+          <span class="pill">Kaynak: <b>USB → PC</b></span>
+          <span class="pill">Arayüz: <b>Web + ngrok</b></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="badge">Neon Radar UI • Canvas</div>
+    <div class="badge" id="netBadge">/data • 200ms</div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
